@@ -197,6 +197,9 @@ async def video_info(request: Request, body: URLRequest):
             break
     if not thumb and thumbs:
         thumb = thumbs[0]["url"]
+    # Resolve relative thumbnail URLs
+    if thumb and thumb.startswith("/"):
+        thumb = "https://i.ytimg.com" + thumb
 
     return {
         "success": True,
