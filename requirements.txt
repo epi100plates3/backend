@@ -1,5 +1,5 @@
 fastapi>=0.110,<0.120
 uvicorn[standard]>=0.27,<0.35
-yt-dlp>=2024.10.22
+yt-dlp>=2026.3.1
 pydantic>=2.7,<3
 python-multipart>=0.0.9,<0.1
