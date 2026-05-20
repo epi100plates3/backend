@@ -115,12 +115,15 @@ def _cookies_opts() -> dict:
 
 # yt-dlp options for info extraction only
 # NOTE: No "format" filter here! We extract ALL formats then filter in Python.
+# Using android client to help bypass bot detection on cloud IPs.
 YTDL_INFO_OPTS = {
     "quiet": True,
     "no_warnings": True,
     "extract_flat": False,
     "skip_download": True,
     "socket_timeout": 30,
+    "extractor_args": {"youtube": {"player_client": ["android"]}},
+    "extractor_retries": 3,
     **_cookies_opts(),
 }
 
@@ -132,6 +135,8 @@ YTDL_DOWNLOAD_OPTS_BASE = {
     "retries": 3,
     "fragment_retries": 3,
     "nocheckcertificate": True,
+    "extractor_args": {"youtube": {"player_client": ["android"]}},
+    "extractor_retries": 3,
     **_cookies_opts(),
 }
 
