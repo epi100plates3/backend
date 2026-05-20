@@ -5,20 +5,47 @@ NO FFMPEG - Progressive MP4 streams only.
 
 import os
 import re
+import time
 import tempfile
 import asyncio
 from pathlib import Path
+from collections import defaultdict
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel, HttpUrl
-from slowapi import Limiter
-from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
+from pydantic import BaseModel
 
 import yt_dlp
+
+# ─── Simple In-Memory Rate Limiter ──────────────────────────────────────────
+
+class RateLimiter:
+    """Simple per-IP rate limiter (no external deps)."""
+    def __init__(self):
+        self._buckets: dict[str, list[float]] = defaultdict(list)
+
+    def check(self, ip: str, max_requests: int, window_seconds: int = 60) -> bool:
+        now = time.time()
+        bucket = self._buckets[ip]
+        # Remove old entries
+        while bucket and bucket[0] < now - window_seconds:
+            bucket.pop(0)
+        if len(bucket) >= max_requests:
+            return False
+        bucket.append(now)
+        return True
+
+rate_limiter = RateLimiter()
+
+def get_client_ip(request: Request) -> str:
+    """Extract client IP from request headers."""
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
 
 # ─── App Init ────────────────────────────────────────────────────────────────
 
@@ -33,21 +60,9 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://epii.pl", "http://localhost", "http://127.0.0.1"],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Rate limiter
-limiter = Limiter(key_func=get_remote_address)
-app.state.limiter = limiter
-
-
-@app.exception_handler(RateLimitExceeded)
-async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
-    return JSONResponse(
-        status_code=429,
-        content={"error": "Too many requests. Try again later."},
-    )
 
 
 # ─── Pydantic Models ──────────────────────────────────────────────────────────
@@ -253,11 +268,18 @@ async def health_check():
 
 
 @app.post("/api/info")
-@limiter.limit("10/minute")
 async def video_info(request: Request, body: URLRequest):
     """
     Get video info: title, thumbnail, available progressive MP4 formats.
     """
+    # Rate limit check
+    ip = get_client_ip(request)
+    if not rate_limiter.check(ip, 10, 60):
+        return JSONResponse(
+            status_code=429,
+            content={"error": "Too many requests. Try again later."},
+        )
+
     url = body.url.strip()
 
     if not url:
@@ -282,12 +304,19 @@ async def video_info(request: Request, body: URLRequest):
 
 
 @app.post("/api/download")
-@limiter.limit("5/minute")
 async def download_video_endpoint(request: Request, body: DownloadRequest):
     """
     Download a video in the selected progressive MP4 format.
     Returns the file as a streaming response.
     """
+    # Rate limit check
+    ip = get_client_ip(request)
+    if not rate_limiter.check(ip, 5, 60):
+        return JSONResponse(
+            status_code=429,
+            content={"error": "Too many requests. Try again later."},
+        )
+
     url = body.url.strip()
     format_id = body.format_id.strip()
 
