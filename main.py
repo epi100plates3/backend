@@ -121,9 +121,7 @@ YTDL_INFO_OPTS = {
     "extract_flat": False,
     "skip_download": True,
     "socket_timeout": 30,
-    "http_headers": {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
-    },
+    "impersonate": "chrome",
     **_cookies_opts(),
 }
 
@@ -135,9 +133,7 @@ YTDL_DOWNLOAD_OPTS_BASE = {
     "retries": 3,
     "fragment_retries": 3,
     "nocheckcertificate": True,
-    "http_headers": {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
-    },
+    "impersonate": "chrome",
     **_cookies_opts(),
 }
 
