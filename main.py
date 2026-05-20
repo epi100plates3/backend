@@ -1,18 +1,21 @@
 """
-YouTube Downloader API - Backend (FastAPI + Invidious Proxy)
-NO FFMPEG - Progressive MP4 streams only.
-Uses public Invidious instances to bypass Render.com IP blocking.
+YouTube Downloader API - Backend (FastAPI + Invidious + ffmpeg)
+Uses Invidious to get stream URLs, ffmpeg to merge video+audio.
+Supports up to 1080p.
 """
 
 import re
 import time
 import httpx
+import asyncio
+import tempfile
+import subprocess
 from pathlib import Path
 from collections import defaultdict
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse, JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel
 
 
@@ -43,7 +46,7 @@ def get_client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-# ─── Invidious Instances ───────────────────────────────────────────────────
+# ─── Invidious ─────────────────────────────────────────────────────────────
 
 INVIDIOUS_INSTANCES = [
     "https://invidious.slipfox.xyz",
@@ -53,13 +56,24 @@ INVIDIOUS_INSTANCES = [
     "https://yewtu.be",
 ]
 
+PROGRESSIVE_ITAGS = {"18": "360p", "22": "720p"}
 
-# ─── App Init ──────────────────────────────────────────────────────────────
+# Common adaptive itags → quality label
+RESOLUTION_MAP = {
+    "137": "1080p", "136": "720p", "135": "480p", "134": "360p",
+    "133": "240p", "160": "144p",
+    "247": "720p", "248": "1080p",  # webm
+    "298": "720p", "299": "1080p",  # mp4 (no audio)
+    "399": "1080p", "398": "720p", "397": "480p", "396": "360p",  # av01
+}
+
+
+# ─── App ───────────────────────────────────────────────────────────────────
 
 app = FastAPI(
     title="YT Downloader API",
-    description="YouTube progressive MP4 downloader (no ffmpeg, Invidious proxy)",
-    version="2.0.0",
+    description="YouTube downloader with ffmpeg merging (Invidious proxy)",
+    version="3.0.0",
 )
 
 app.add_middleware(
@@ -79,12 +93,7 @@ class URLRequest(BaseModel):
 
 class DownloadRequest(BaseModel):
     url: str
-    format_id: str
-
-
-# ─── Constants ─────────────────────────────────────────────────────────────
-
-PROGRESSIVE_FORMATS = {"18": "360p", "22": "720p"}
+    itag: str  # video itag (e.g. "137" for 1080p)
 
 
 # ─── Helpers ───────────────────────────────────────────────────────────────
@@ -111,13 +120,12 @@ def extract_video_id(url: str) -> str:
 
 
 async def fetch_invidious(video_id: str) -> dict:
-    """Try Invidious instances until one responds."""
     async with httpx.AsyncClient(timeout=15) as client:
         for instance in INVIDIOUS_INSTANCES:
             try:
                 r = await client.get(
                     f"{instance}/api/v1/videos/{video_id}",
-                    headers={"User-Agent": "ytdown/2.0"},
+                    headers={"User-Agent": "ytdown/3.0"},
                 )
                 if r.status_code == 200:
                     return r.json()
@@ -126,33 +134,21 @@ async def fetch_invidious(video_id: str) -> dict:
     return {"error": "all instances unreachable"}
 
 
-def find_progressive_mp4(streams: list[dict]) -> list[dict]:
-    """Extract progressive MP4 formats (itags 18, 22)."""
-    result = []
-    for s in streams:
-        itag = str(s.get("itag", ""))
-        if itag in PROGRESSIVE_FORMATS and s.get("container") == "mp4":
-            result.append({
-                "format_id": itag,
-                "quality": PROGRESSIVE_FORMATS[itag],
-                "resolution": s.get("qualityLabel", s.get("resolution", "?")),
-                "filesize": s.get("clen"),
-                "fps": s.get("fps"),
-                "url": s.get("url", ""),
-            })
-    return result
-
-
 # ─── Endpoints ─────────────────────────────────────────────────────────────
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "ytdown-api", "version": "2.0.0"}
+    # Check ffmpeg
+    try:
+        result = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True, timeout=5)
+        ffmpeg_ok = result.returncode == 0
+    except Exception:
+        ffmpeg_ok = False
+    return {"status": "ok", "service": "ytdown-api", "version": "3.0.0", "ffmpeg": ffmpeg_ok}
 
 
 @app.get("/debug")
 async def debug():
-    """Test Invidious connectivity."""
     async with httpx.AsyncClient(timeout=10) as client:
         results = {}
         for inst in INVIDIOUS_INSTANCES:
@@ -180,14 +176,53 @@ async def video_info(request: Request, body: URLRequest):
 
     data = await fetch_invidious(vid)
     if "error" in data:
-        raise HTTPException(status_code=502, detail="All Invidious instances are down. Try later.")
+        raise HTTPException(status_code=502, detail="All Invidious instances down")
 
-    formats = find_progressive_mp4(
-        data.get("formatStreams", []) + data.get("adaptiveFormats", [])
+    # Build format list: progressive MP4 + adaptive video with audio
+    formats = []
+
+    # Progressive (audio+video in one)
+    for s in data.get("formatStreams", []):
+        itag = str(s.get("itag", ""))
+        if itag in PROGRESSIVE_ITAGS:
+            formats.append({
+                "itag": itag,
+                "quality": PROGRESSIVE_ITAGS[itag],
+                "resolution": s.get("qualityLabel", "?"),
+                "fps": s.get("fps"),
+                "type": "progressive",
+                "size": s.get("clen"),
+            })
+
+    # Adaptive video (needs merging with audio)
+    audio_available = any(
+        str(s.get("itag", "")) in ("140", "251")
+        for s in data.get("adaptiveFormats", [])
     )
 
-    if not formats:
-        raise HTTPException(status_code=404, detail="No progressive MP4 formats available")
+    for s in data.get("adaptiveFormats", []):
+        itag = str(s.get("itag", ""))
+        label = s.get("qualityLabel", "") or RESOLUTION_MAP.get(itag, "")
+        # Only include video-only formats (not audio-only)
+        if label and s.get("type","").startswith("video"):
+            # Deduplicate by resolution
+            if not any(f["itag"] == itag for f in formats):
+                formats.append({
+                    "itag": itag,
+                    "quality": label,
+                    "resolution": label,
+                    "fps": s.get("fps"),
+                    "type": "adaptive",
+                    "size": s.get("clen"),
+                    "needs_audio": audio_available,
+                })
+
+    # Sort: progressive first, then by resolution (higher first)
+    def sort_key(f):
+        nums = "".join(c for c in f["quality"] if c.isdigit())
+        return (0 if f["type"] == "progressive" else 1, -int(nums) if nums else 0)
+
+    formats.sort(key=sort_key)
 
     thumb = ""
     thumbs = data.get("videoThumbnails") or []
@@ -197,7 +232,6 @@ async def video_info(request: Request, body: URLRequest):
             break
     if not thumb and thumbs:
         thumb = thumbs[0]["url"]
-    # Resolve relative thumbnail URLs
     if thumb and thumb.startswith("/"):
         thumb = "https://i.ytimg.com" + thumb
 
@@ -218,12 +252,10 @@ async def download_video(request: Request, body: DownloadRequest):
         return JSONResponse(status_code=429, content={"error": "Too many requests"})
 
     url = body.url.strip()
-    fmt_id = body.format_id.strip()
+    itag = body.itag.strip()
 
     if not url or not is_valid_youtube_url(url):
         raise HTTPException(status_code=400, detail="Invalid YouTube URL")
-    if fmt_id not in PROGRESSIVE_FORMATS:
-        raise HTTPException(status_code=400, detail="Unsupported format (use 18 or 22)")
 
     vid = extract_video_id(url)
     if not vid:
@@ -233,15 +265,119 @@ async def download_video(request: Request, body: DownloadRequest):
     if "error" in data:
         raise HTTPException(status_code=502, detail="Invidious instances down")
 
-    dl_url = ""
-    for s in data.get("formatStreams", []) + data.get("adaptiveFormats", []):
-        if str(s.get("itag")) == fmt_id:
-            dl_url = s.get("url", "")
+    title = (data.get("title") or "video").replace("/", "_")[:60]
+
+    # Find video stream
+    video_url = ""
+    video_itag = ""
+    all_streams = data.get("formatStreams", []) + data.get("adaptiveFormats", [])
+    for s in all_streams:
+        if str(s.get("itag")) == itag:
+            video_url = s.get("url", "")
+            video_itag = itag
             break
 
-    if not dl_url:
-        raise HTTPException(status_code=404, detail="Format not available")
+    if not video_url:
+        raise HTTPException(status_code=404, detail="Requested format not available")
 
-    # Return the direct URL – frontend opens it for browser-native download
-    title = (data.get("title") or "video").replace("/", "_")[:60]
-    return {"success": True, "url": dl_url, "filename": f"{title}.mp4"}
+    # Check if this is a progressive format (no audio merging needed)
+    is_progressive = itag in PROGRESSIVE_ITAGS
+
+    if is_progressive:
+        # Progressive MP4 – return direct URL
+        return {"success": True, "url": video_url, "filename": f"{title}.mp4"}
+
+    # Adaptive video – need to merge with audio
+    # Find best audio stream (itag 140 = AAC 128k, itag 251 = Opus 160k)
+    audio_url = ""
+    for s in data.get("adaptiveFormats", []):
+        if str(s.get("itag")) in ("140", "251") and s.get("type","").startswith("audio"):
+            audio_url = s.get("url", "")
+            break
+
+    if not audio_url:
+        raise HTTPException(status_code=404, detail="No audio stream available for merging")
+
+    # Download video and audio to temp files
+    tmpdir = Path(tempfile.gettempdir()) / "ytdown_tmp"
+    tmpdir.mkdir(exist_ok=True)
+
+    video_file = tmpdir / f"video_{vid}_{itag}.mp4"
+    audio_file = tmpdir / f"audio_{vid}.m4a"
+    output_file = tmpdir / f"{title}.mp4"
+
+    try:
+        async with httpx.AsyncClient(timeout=300, follow_redirects=True) as client:
+            # Download video
+            async with client.stream("GET", video_url) as resp:
+                with open(video_file, "wb") as f:
+                    async for chunk in resp.aiter_bytes(1024 * 1024):
+                        f.write(chunk)
+
+            # Download audio
+            async with client.stream("GET", audio_url) as resp:
+                with open(audio_file, "wb") as f:
+                    async for chunk in resp.aiter_bytes(1024 * 1024):
+                        f.write(chunk)
+
+        # Merge with ffmpeg
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", str(video_file),
+            "-i", str(audio_file),
+            "-c:v", "copy",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-movflags", "+faststart",
+            str(output_file),
+        ]
+
+        loop = asyncio.get_event_loop()
+        proc = await loop.run_in_executor(
+            None,
+            lambda: subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        )
+
+        if proc.returncode != 0:
+            raise HTTPException(
+                status_code=500,
+                detail=f"ffmpeg merge failed: {proc.stderr[:200]}",
+            )
+
+        # Clean up inputs
+        video_file.unlink(missing_ok=True)
+        audio_file.unlink(missing_ok=True)
+
+        return FileResponse(
+            path=str(output_file),
+            media_type="video/mp4",
+            filename=f"{title}.mp4",
+            background=None,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Cleanup on error
+        for f in [video_file, audio_file, output_file]:
+            f.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail=f"Download failed: {str(e)[:200]}")
+
+
+# ─── Startup Cleanup ───────────────────────────────────────────────────────
+
+@app.on_event("startup")
+async def startup():
+    tmpdir = Path(tempfile.gettempdir()) / "ytdown_tmp"
+    tmpdir.mkdir(exist_ok=True)
+    for f in tmpdir.glob("*.mp4"):
+        try:
+            f.unlink(missing_ok=True)
+        except Exception:
+            pass
+    for f in tmpdir.glob("*.m4a"):
+        try:
+            f.unlink(missing_ok=True)
+        except Exception:
+            pass
+    print("[INFO] YT Downloader API v3.0 – Invidious + ffmpeg")
