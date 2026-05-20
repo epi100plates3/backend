@@ -119,18 +119,21 @@ def extract_video_id(url: str) -> str:
     return ""
 
 
-async def fetch_invidious(video_id: str) -> dict:
-    async with httpx.AsyncClient(timeout=15) as client:
-        for instance in INVIDIOUS_INSTANCES:
-            try:
-                r = await client.get(
-                    f"{instance}/api/v1/videos/{video_id}",
-                    headers={"User-Agent": "ytdown/3.0"},
-                )
-                if r.status_code == 200:
-                    return r.json()
-            except Exception:
-                continue
+async def fetch_invidious(video_id: str, retries: int = 3) -> dict:
+    for attempt in range(retries):
+        async with httpx.AsyncClient(timeout=20) as client:
+            for instance in INVIDIOUS_INSTANCES:
+                try:
+                    r = await client.get(
+                        f"{instance}/api/v1/videos/{video_id}",
+                        headers={"User-Agent": "ytdown/3.0"},
+                    )
+                    if r.status_code == 200:
+                        return r.json()
+                except Exception:
+                    continue
+        if attempt < retries - 1:
+            await asyncio.sleep(2)  # Wait before retry
     return {"error": "all instances unreachable"}
 
 
