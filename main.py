@@ -119,7 +119,8 @@ def extract_video_id(url: str) -> str:
     return ""
 
 
-async def fetch_invidious(video_id: str, retries: int = 3) -> dict:
+async def fetch_invidious(video_id: str, retries: int = 3) -> tuple[dict, str]:
+    """Returns (data_dict, instance_url)."""
     for attempt in range(retries):
         async with httpx.AsyncClient(timeout=20) as client:
             for instance in INVIDIOUS_INSTANCES:
@@ -129,12 +130,12 @@ async def fetch_invidious(video_id: str, retries: int = 3) -> dict:
                         headers={"User-Agent": "ytdown/3.0"},
                     )
                     if r.status_code == 200:
-                        return r.json()
+                        return r.json(), instance
                 except Exception:
                     continue
         if attempt < retries - 1:
-            await asyncio.sleep(2)  # Wait before retry
-    return {"error": "all instances unreachable"}
+            await asyncio.sleep(2)
+    return {"error": "all instances unreachable"}, ""
 
 
 # ─── Endpoints ─────────────────────────────────────────────────────────────
@@ -177,7 +178,7 @@ async def video_info(request: Request, body: URLRequest):
     if not vid:
         raise HTTPException(status_code=400, detail="Could not extract video ID")
 
-    data = await fetch_invidious(vid)
+    data, _instance = await fetch_invidious(vid)
     if "error" in data:
         raise HTTPException(status_code=502, detail="All Invidious instances down")
 
@@ -264,7 +265,7 @@ async def download_video(request: Request, body: DownloadRequest):
     if not vid:
         raise HTTPException(status_code=400, detail="Could not extract video ID")
 
-    data = await fetch_invidious(vid)
+    data, used_instance = await fetch_invidious(vid)
     if "error" in data:
         raise HTTPException(status_code=502, detail="Invidious instances down")
 
@@ -290,16 +291,9 @@ async def download_video(request: Request, body: DownloadRequest):
         # Progressive MP4 – return direct URL
         return {"success": True, "url": video_url, "filename": f"{title}.mp4"}
 
-    # Adaptive video – need to merge with audio
-    # Find best audio stream (itag 140 = AAC 128k, itag 251 = Opus 160k)
-    audio_url = ""
-    for s in data.get("adaptiveFormats", []):
-        if str(s.get("itag")) in ("140", "251") and s.get("type","").startswith("audio"):
-            audio_url = s.get("url", "")
-            break
-
-    if not audio_url:
-        raise HTTPException(status_code=404, detail="No audio stream available for merging")
+    # Adaptive video – download via Invidious proxy (avoids IP blocks)
+    inv_video_url = f"{used_instance}/api/v1/videos/{vid}/download/{itag}"
+    inv_audio_url = f"{used_instance}/api/v1/videos/{vid}/download/140"
 
     # Download video and audio to temp files
     tmpdir = Path(tempfile.gettempdir()) / "ytdown_tmp"
@@ -329,9 +323,10 @@ async def download_video(request: Request, body: DownloadRequest):
                 raise Exception("Empty file downloaded")
 
         # Download video and audio in parallel
+        loop = asyncio.get_event_loop()
         await asyncio.gather(
-            loop.run_in_executor(None, _download, video_url, video_file),
-            loop.run_in_executor(None, _download, audio_url, audio_file),
+            loop.run_in_executor(None, _download, inv_video_url, video_file),
+            loop.run_in_executor(None, _download, inv_audio_url, audio_file),
         )
 
         # Merge with ffmpeg
