@@ -342,9 +342,11 @@ async def download_video(request: Request, body: DownloadRequest):
         )
 
         if proc.returncode != 0:
+            # Log full ffmpeg output for debugging
+            error_msg = proc.stderr[-500:] or proc.stdout[-500:] or "unknown error"
             raise HTTPException(
                 status_code=500,
-                detail=f"ffmpeg merge failed: {proc.stderr[:200]}",
+                detail=f"ffmpeg merge failed: {error_msg}",
             )
 
         # Clean up inputs
