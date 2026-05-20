@@ -98,6 +98,21 @@ DOWNLOAD_TIMEOUT = 120
 TEMP_DIR = Path(tempfile.gettempdir()) / "ytdown_tmp"
 TEMP_DIR.mkdir(exist_ok=True)
 
+# Cookies file path (for YouTube bot detection)
+# Place a cookies.txt file (Netscape format) next to main.py
+COOKIES_FILE = Path(__file__).parent / "cookies.txt"
+if COOKIES_FILE.exists():
+    print(f"[INFO] Using cookies file: {COOKIES_FILE}")
+else:
+    print("[WARN] No cookies.txt found. YouTube may block requests from cloud IPs.")
+    COOKIES_FILE = None
+
+def _cookies_opts() -> dict:
+    """Return cookies option dict if cookies file exists."""
+    if COOKIES_FILE and COOKIES_FILE.exists():
+        return {"cookiefile": str(COOKIES_FILE)}
+    return {}
+
 # yt-dlp options for info extraction only
 YTDL_INFO_OPTS = {
     "quiet": True,
@@ -106,6 +121,7 @@ YTDL_INFO_OPTS = {
     "skip_download": True,
     "format": "best[ext=mp4][acodec!=none][vcodec!=none]",
     "socket_timeout": 30,
+    **_cookies_opts(),
 }
 
 # yt-dlp options for actual download
@@ -116,6 +132,7 @@ YTDL_DOWNLOAD_OPTS_BASE = {
     "retries": 3,
     "fragment_retries": 3,
     "nocheckcertificate": True,
+    **_cookies_opts(),
 }
 
 

@@ -1,0 +1,31 @@
+# ──────────────────────────────────────────────────────────────
+# YT Downloader – Cookies File
+# ──────────────────────────────────────────────────────────────
+# 
+# YouTube wymaga ciasteczek, żeby nie blokować requestów z chmury.
+# 
+# JAK WYEXPORTOWAĆ COOKIES (Netscape format):
+#
+# 1. Zainstaluj rozszerzenie "cookies.txt" (GET cookies.txt LOCALLY)
+#    https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc
+#
+# 2. Zaloguj się na YouTube w przeglądarce
+#
+# 3. Kliknij ikonkę rozszerzenia → "Export" → zapisz jako cookies.txt
+#
+# 4. Skopiuj plik cookies.txt do tego folderu (backend/)
+#
+# 5. Dodaj do repozytorium GitHub
+#
+# UWAGA: Plik cookies.txt wygasa po kilku dniach/tygodniach.
+#        Jeśli przestanie działać, wyeksportuj go ponownie.
+# ──────────────────────────────────────────────────────────────
+# 
+# Poniżej przykładowa struktura pliku cookies.txt:
+# 
+# .youtube.com	TRUE	/	FALSE	1735689600	CONSENT	YES+shp.gws-...
+# .youtube.com	TRUE	/	FALSE	1735689600	__Secure-3PSID	...
+# .youtube.com	TRUE	/	FALSE	1735689600	__Secure-3PAPISID	...
+# 
+# UWAGA: To jest przykładowy plik – NIE DZIAŁA.
+#        Musisz wyeksportować własne ciasteczka!
