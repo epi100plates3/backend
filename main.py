@@ -242,18 +242,6 @@ async def download_video(request: Request, body: DownloadRequest):
     if not dl_url:
         raise HTTPException(status_code=404, detail="Format not available")
 
-    # Stream the video through our backend (bypasses CORS on googlevideo.com)
+    # Return the direct URL – frontend opens it for browser-native download
     title = (data.get("title") or "video").replace("/", "_")[:60]
-    filename = f"{title}.mp4"
-
-    async def video_stream():
-        async with httpx.AsyncClient(timeout=300) as client:
-            async with client.stream("GET", dl_url) as resp:
-                async for chunk in resp.aiter_bytes(1024 * 1024):  # 1MB chunks
-                    yield chunk
-
-    return StreamingResponse(
-        video_stream(),
-        media_type="video/mp4",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
+    return {"success": True, "url": dl_url, "filename": f"{title}.mp4"}
