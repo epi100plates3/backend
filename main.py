@@ -310,18 +310,32 @@ async def download_video(request: Request, body: DownloadRequest):
     output_file = tmpdir / f"{title}.mp4"
 
     try:
+        dl_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
+            "Accept": "video/mp4,video/*;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://invidious.slipfox.xyz",
+            "Origin": "https://invidious.slipfox.xyz",
+        }
         async with httpx.AsyncClient(timeout=300, follow_redirects=True) as client:
             # Download video
-            async with client.stream("GET", video_url) as resp:
-                with open(video_file, "wb") as f:
-                    async for chunk in resp.aiter_bytes(1024 * 1024):
-                        f.write(chunk)
+            r = await client.get(video_url, headers=dl_headers)
+            if r.status_code != 200:
+                raise HTTPException(status_code=502, detail=f"Video download failed (HTTP {r.status_code})")
+            content_type = r.headers.get("content-type", "")
+            if "text" in content_type:
+                raise HTTPException(status_code=502, detail="Video download returned HTML instead of video (URL expired)")
+            with open(video_file, "wb") as f:
+                async for chunk in r.aiter_bytes(1024 * 1024):
+                    f.write(chunk)
 
             # Download audio
-            async with client.stream("GET", audio_url) as resp:
-                with open(audio_file, "wb") as f:
-                    async for chunk in resp.aiter_bytes(1024 * 1024):
-                        f.write(chunk)
+            r = await client.get(audio_url, headers=dl_headers)
+            if r.status_code != 200:
+                raise HTTPException(status_code=502, detail=f"Audio download failed (HTTP {r.status_code})")
+            with open(audio_file, "wb") as f:
+                async for chunk in r.aiter_bytes(1024 * 1024):
+                    f.write(chunk)
 
         # Merge with ffmpeg
         cmd = [
