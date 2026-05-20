@@ -118,7 +118,7 @@ def _cookies_opts() -> dict:
 YTDL_INFO_OPTS = {
     "quiet": True,
     "no_warnings": True,
-    "extract_flat": False,
+    "extract_flat": True,       # Minimal extraction, skips player responses
     "skip_download": True,
     "socket_timeout": 30,
     **_cookies_opts(),
@@ -282,6 +282,20 @@ def cleanup_old_files(max_age_seconds: int = 600):
 async def health_check():
     """Health check endpoint for Render.com."""
     return {"status": "ok", "service": "ytdown-api"}
+
+
+@app.get("/debug")
+async def debug_info():
+    """Debug endpoint – shows cookies status, paths, yt-dlp version."""
+    import yt_dlp.version
+    return {
+        "yt_dlp_version": yt_dlp.version.__version__,
+        "cookies_file": str(COOKIES_FILE) if COOKIES_FILE else None,
+        "cookies_exists": COOKIES_FILE.exists() if COOKIES_FILE else False,
+        "cookies_opts": _cookies_opts(),
+        "cwd": os.getcwd(),
+        "main_py_dir": str(Path(__file__).parent),
+    }
 
 
 @app.post("/api/info")
