@@ -12,7 +12,7 @@ from collections import defaultdict
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse, JSONResponse
+from fastapi.responses import RedirectResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 
@@ -230,10 +230,27 @@ async def download_video(request: Request, body: DownloadRequest):
     if "error" in data:
         raise HTTPException(status_code=502, detail="Invidious instances down")
 
+    dl_url = ""
     for s in data.get("formatStreams", []) + data.get("adaptiveFormats", []):
         if str(s.get("itag")) == fmt_id:
             dl_url = s.get("url", "")
-            if dl_url:
-                return RedirectResponse(url=dl_url)
+            break
 
-    raise HTTPException(status_code=404, detail="Format not available")
+    if not dl_url:
+        raise HTTPException(status_code=404, detail="Format not available")
+
+    # Stream the video through our backend (bypasses CORS on googlevideo.com)
+    title = (data.get("title") or "video").replace("/", "_")[:60]
+    filename = f"{title}.mp4"
+
+    async def video_stream():
+        async with httpx.AsyncClient(timeout=300) as client:
+            async with client.stream("GET", dl_url) as resp:
+                async for chunk in resp.aiter_bytes(1024 * 1024):  # 1MB chunks
+                    yield chunk
+
+    return StreamingResponse(
+        video_stream(),
+        media_type="video/mp4",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
