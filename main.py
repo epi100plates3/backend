@@ -46,13 +46,11 @@ def get_client_ip(request: Request) -> str:
 # ─── Invidious Instances ───────────────────────────────────────────────────
 
 INVIDIOUS_INSTANCES = [
+    "https://invidious.slipfox.xyz",
+    "https://invidious.darkness.services",
     "https://inv.nadeko.net",
-    "https://invidious.fdn.fr",
-    "https://yewtu.be",
-    "https://vid.puffyan.us",
-    "https://invidious.privacyredirect.com",
-    "https://yt.artemislena.eu",
     "https://invidious.nerdvpn.de",
+    "https://yewtu.be",
 ]
 
 
