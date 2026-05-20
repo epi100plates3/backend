@@ -114,12 +114,12 @@ def _cookies_opts() -> dict:
     return {}
 
 # yt-dlp options for info extraction only
+# NOTE: No "format" filter here! We extract ALL formats then filter in Python.
 YTDL_INFO_OPTS = {
     "quiet": True,
     "no_warnings": True,
     "extract_flat": False,
     "skip_download": True,
-    "format": "best[ext=mp4][acodec!=none][vcodec!=none]",
     "socket_timeout": 30,
     **_cookies_opts(),
 }
