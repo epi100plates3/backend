@@ -121,7 +121,6 @@ YTDL_INFO_OPTS = {
     "extract_flat": False,
     "skip_download": True,
     "socket_timeout": 30,
-    "impersonate": "chrome",
     **_cookies_opts(),
 }
 
@@ -133,7 +132,6 @@ YTDL_DOWNLOAD_OPTS_BASE = {
     "retries": 3,
     "fragment_retries": 3,
     "nocheckcertificate": True,
-    "impersonate": "chrome",
     **_cookies_opts(),
 }
 
